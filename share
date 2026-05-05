@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# ~/bin/share
+
+SHARE_DIR="${HOME}/.local/share/ttyd-share"
+INSTALL_DIR="${HOME}/bin"
+SCRIPT_NAME="share"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+
+_ok()   { echo -e "  ${GREEN}✓${NC}  $*"; }
+_skip() { echo -e "  ${DIM}–${NC}  $* ${DIM}(already ok)${NC}"; }
+_fix()  { echo -e "  ${YELLOW}→${NC}  $*"; }
+_err()  { echo -e "  ${RED}✗${NC}  $*"; }
+
+_os() {
+    case "$OSTYPE" in
+        darwin*) echo "macos" ;;
+        linux*)  echo "linux" ;;
+        *)       echo "unknown" ;;
+    esac
+}
+
+_install_ttyd() {
+    if [[ "$(_os)" == "macos" ]]; then
+        _fix "brew install ttyd"
+        brew install ttyd
+    else
+        local arch; arch=$(uname -m)
+        _fix "Downloading ttyd static binary ($arch)..."
+        sudo curl -fsSL \
+            "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.$arch" \
+            -o /usr/local/bin/ttyd
+        sudo chmod +x /usr/local/bin/ttyd
+    fi
+}
+
+_install_cloudflared() {
+    if [[ "$(_os)" == "macos" ]]; then
+        _fix "brew install cloudflared"
+        brew install cloudflared
+    else
+        local arch
+        case $(uname -m) in
+            x86_64)        arch="amd64" ;;
+            aarch64|arm64) arch="arm64" ;;
+            armv7l)        arch="arm"   ;;
+            *)             arch="amd64" ;;
+        esac
+        _fix "Downloading cloudflared binary ($arch)..."
+        sudo curl -fsSL \
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch" \
+            -o /usr/local/bin/cloudflared
+        sudo chmod +x /usr/local/bin/cloudflared
+    fi
+}
+
+_share_install() {
+    local os; os=$(_os)
+    echo -e "\n${BOLD}share install${NC}  ${DIM}(os: $os)${NC}\n"
+
+    # ── 1. Homebrew（仅 macOS）──────────────────────────────────────────
+    echo -e "${BOLD}[1/5] Homebrew${NC}"
+    if [[ "$os" == "macos" ]]; then
+        if command -v brew >/dev/null 2>&1; then
+            _skip "brew $(brew --version | head -1)"
+        else
+            _err "Homebrew not found. Install it first:"
+            echo -e "       ${CYAN}https://brew.sh${NC}"; exit 1
+        fi
+    else
+        _skip "skipped on $os"
+    fi
+
+    # ── 2. ttyd ─────────────────────────────────────────────────────────
+    echo -e "\n${BOLD}[2/5] ttyd${NC}"
+    if command -v ttyd >/dev/null 2>&1; then
+        _skip "ttyd $(ttyd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    else
+        _install_ttyd && _ok "ttyd installed" || { _err "ttyd install failed"; exit 1; }
+    fi
+
+    # ── 3. cloudflared ──────────────────────────────────────────────────
+    echo -e "\n${BOLD}[3/5] cloudflared${NC}"
+    if command -v cloudflared >/dev/null 2>&1; then
+        _skip "cloudflared $(cloudflared --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    else
+        _install_cloudflared && _ok "cloudflared installed" || { _err "cloudflared install failed"; exit 1; }
+    fi
+
+    # ── 4. ~/bin + 脚本 ─────────────────────────────────────────────────
+    echo -e "\n${BOLD}[4/5] ~/bin/share${NC}"
+    [[ -d "$INSTALL_DIR" ]] || { _fix "Creating $INSTALL_DIR"; mkdir -p "$INSTALL_DIR"; }
+
+    local script_path="$INSTALL_DIR/$SCRIPT_NAME"
+    local self_path
+    self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+    if [[ -f "$script_path" ]] && diff -q "$self_path" "$script_path" >/dev/null 2>&1; then
+        _skip "$script_path is up to date"
+    else
+        [[ -f "$script_path" ]] && _fix "Updating $script_path" || _fix "Copying to $script_path"
+        cp "$self_path" "$script_path"
+        _ok "Done"
+    fi
+    chmod +x "$script_path"
+
+    # ── 5. PATH ─────────────────────────────────────────────────────────
+    echo -e "\n${BOLD}[5/5] PATH${NC}"
+    local shell_rc
+    case "${SHELL##*/}" in
+        zsh)  shell_rc="$HOME/.zshrc" ;;
+        bash) shell_rc="$HOME/.bash_profile" ;;
+        *)    shell_rc="$HOME/.profile" ;;
+    esac
+
+    local path_line='export PATH="$HOME/bin:$PATH"'
+
+    if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+        _skip "$INSTALL_DIR already in PATH"
+    elif grep -qF "$path_line" "$shell_rc" 2>/dev/null; then
+        _skip "PATH entry in $shell_rc ${DIM}(reload shell to apply)${NC}"
+    else
+        _fix "Adding $INSTALL_DIR to PATH in $shell_rc"
+        printf '\n# share tool\n%s\n' "$path_line" >> "$shell_rc"
+        _ok "Added"
+        echo -e "\n  ${YELLOW}⚠${NC}  Reload now:  ${CYAN}source $shell_rc${NC}"
+    fi
+
+    echo -e "\n${GREEN}${BOLD}All done!${NC}"
+    echo -e "  Run: ${CYAN}share <command...>${NC}"
+    echo -e "  e.g. ${DIM}share claude --dangerously-skip-permissions${NC}\n"
+}
+
+_share_start() {
+    local cmd_display="$*"
+    [[ $# -eq 0 ]] && { echo -e "${RED}Usage: share <command...>${NC}"; exit 1; }
+
+    command -v ttyd        >/dev/null 2>&1 || { echo -e "${RED}ttyd not found — run: share install${NC}"; exit 1; }
+    command -v cloudflared >/dev/null 2>&1 || { echo -e "${RED}cloudflared not found — run: share install${NC}"; exit 1; }
+
+    mkdir -p "$SHARE_DIR"
+    local job_id job_dir
+    job_id="$(date +%s)$$"
+    job_dir="$SHARE_DIR/$job_id"
+    mkdir -p "$job_dir"
+
+    local ttyd_log="$job_dir/ttyd.log"
+    local cf_log="$job_dir/cloudflared.log"
+
+    ttyd -W -p 0 "$@" >"$ttyd_log" 2>&1 &
+    local ttyd_pid=$!
+    echo "$ttyd_pid" > "$job_dir/ttyd.pid"
+
+    echo -e "${YELLOW}⏳ Starting ttyd...${NC}"
+    local port="" elapsed=0
+    while [[ -z "$port" && $elapsed -lt 15 ]]; do
+        port=$(grep -oE 'Listening on port: [0-9]+' "$ttyd_log" 2>/dev/null \
+               | grep -oE '[0-9]+$' | head -1 || true)
+        if ! kill -0 "$ttyd_pid" 2>/dev/null; then
+            echo -e "${RED}✗ ttyd exited early. Log:${NC}"; cat "$ttyd_log"
+            rm -rf "$job_dir"; exit 1
+        fi
+        sleep 0.5; (( elapsed++ )) || true
+    done
+
+    if [[ -z "$port" ]]; then
+        echo -e "${RED}✗ Could not detect ttyd port. Log:${NC}"
+        tail -20 "$ttyd_log"; rm -rf "$job_dir"; exit 1
+    fi
+
+    printf '%s\n%s\n' "$cmd_display" "$port" > "$job_dir/meta"
+
+    echo -e "${YELLOW}⏳ Creating tunnel on port $port...${NC}"
+    cloudflared tunnel --no-autoupdate --url "http://localhost:$port" >"$cf_log" 2>&1 &
+    local cf_pid=$!
+    echo "$cf_pid" > "$job_dir/cloudflared.pid"
+
+    local url="" elapsed=0
+    while [[ -z "$url" && $elapsed -lt 40 ]]; do
+        url=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$cf_log" 2>/dev/null \
+              | head -1 || true)
+        if ! kill -0 "$cf_pid" 2>/dev/null; then
+            echo -e "${RED}✗ cloudflared exited early. Log:${NC}"; cat "$cf_log"
+            rm -rf "$job_dir"; exit 1
+        fi
+        sleep 1; (( elapsed++ )) || true
+    done
+
+    if [[ -z "$url" ]]; then
+        echo -e "${RED}✗ Timed out waiting for URL. Last log:${NC}"
+        tail -20 "$cf_log"
+        echo -e "\n  Job ${BOLD}$job_id${NC} kept. Run: share stop $job_id"
+        exit 1
+    fi
+
+    echo "$url" > "$job_dir/url"
+    echo -e "\n${GREEN}${BOLD}✓ Tunnel is up!${NC}"
+    echo -e "  ${BOLD}Job ID :${NC} ${CYAN}$job_id${NC}"
+    echo -e "  ${BOLD}Command:${NC} $cmd_display"
+    echo -e "  ${BOLD}Port   :${NC} $port (local)"
+    echo -e "  ${BOLD}URL    :${NC} ${GREEN}$url${NC}\n"
+    echo -e "  Stop with: ${YELLOW}share stop $job_id${NC}"
+}
+
+_share_stop() {
+    local job_id="${1:-}"
+    [[ -z "$job_id" ]] && { echo "Usage: share stop <job_id>"; exit 1; }
+    local job_dir="$SHARE_DIR/$job_id"
+    [[ -d "$job_dir" ]] || { echo -e "${RED}Job $job_id not found${NC}"; exit 1; }
+
+    for pidfile in "$job_dir"/*.pid; do
+        [[ -f "$pidfile" ]] || continue
+        local pid name
+        pid=$(cat "$pidfile"); name=$(basename "$pidfile" .pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            pkill -P "$pid" 2>/dev/null || true
+            kill "$pid"    2>/dev/null || true
+            echo -e "  ${GREEN}✓${NC} Killed $name (pid=$pid)"
+        else
+            echo -e "  ${YELLOW}~${NC} $name (pid=$pid) already gone"
+        fi
+    done
+    rm -rf "$job_dir"
+    echo -e "${GREEN}Job $job_id stopped${NC}"
+}
+
+_share_list() {
+    local found=0
+    for job_dir in "$SHARE_DIR"/*/; do
+        [[ -d "$job_dir" ]] || continue
+        local job_id cmd="" port="" url="(unknown)"
+        job_id=$(basename "$job_dir")
+        [[ -f "$job_dir/meta" ]] && { cmd=$(sed -n '1p' "$job_dir/meta"); port=$(sed -n '2p' "$job_dir/meta"); }
+        [[ -f "$job_dir/url"  ]] && url=$(cat "$job_dir/url")
+        local alive=true
+        for pidfile in "$job_dir"/*.pid; do
+            [[ -f "$pidfile" ]] || continue
+            kill -0 "$(cat "$pidfile")" 2>/dev/null || { alive=false; break; }
+        done
+        local status="${GREEN}running${NC}"; $alive || status="${RED}dead${NC}"
+        echo -e "  ${BOLD}$job_id${NC}  :$port  cmd=${CYAN}$cmd${NC}  url=$url  [$status]"
+        (( found++ )) || true
+    done
+    [[ $found -eq 0 ]] && echo "  No jobs found"
+}
+
+case "${1:-}" in
+    install)       _share_install ;;
+    stop)          _share_stop  "${2:-}" ;;
+    list)          _share_list ;;
+    help|-h|--help)
+        echo "Usage:"
+        echo "  share install         Install dependencies and set up environment"
+        echo "  share <command...>    Share any command via web terminal"
+        echo "  share stop <job_id>  Stop a running job"
+        echo "  share list           List all jobs"
+        echo ""
+        echo "Examples:"
+        echo "  share tmux"
+        echo "  share claude --dangerously-skip-permissions"
+        ;;
+    "") echo "Usage: share install  |  share <command...>  |  share stop <id>  |  share list"; exit 1 ;;
+    *)  _share_start "$@" ;;
+esac
