@@ -49,7 +49,7 @@ $ share claude --dangerously-skip-permissions
 ### One-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/qiaodeli111/share2net/main/share | bash -s -- install
+curl -fsSL https://raw.githubusercontent.com/qiaodeli111/share2net/refs/heads/master/share | bash -s -- install
 ```
 
 This will:
@@ -70,7 +70,7 @@ This will:
 
 ```bash
 # Download the script
-curl -fsSL https://raw.githubusercontent.com/qiaodeli111/share2net/main/share -o ~/bin/share
+curl -fsSL https://raw.githubusercontent.com/qiaodeli111/share2net/refs/heads/master/share -o ~/bin/share
 chmod +x ~/bin/share
 
 # Install dependencies
