@@ -94,7 +94,16 @@ _share_install() {
 
     local script_path="$INSTALL_DIR/$SCRIPT_NAME"
     local self_path
-    self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [[ -f "${BASH_SOURCE[0]}" ]]; then
+        self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    elif [[ ! -t 0 ]]; then
+        self_path=$(mktemp)
+        trap "rm -f '$self_path'" RETURN EXIT
+        cat > "$self_path"
+    else
+        _err "Cannot determine script source. Run with: curl -fsSL ... | bash"
+        exit 1
+    fi
 
     if [[ -f "$script_path" ]] && diff -q "$self_path" "$script_path" >/dev/null 2>&1; then
         _skip "$script_path is up to date"
