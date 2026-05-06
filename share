@@ -93,26 +93,22 @@ _share_install() {
     [[ -d "$INSTALL_DIR" ]] || { _fix "Creating $INSTALL_DIR"; mkdir -p "$INSTALL_DIR"; }
 
     local script_path="$INSTALL_DIR/$SCRIPT_NAME"
-    local self_path
-    if [[ -f "${BASH_SOURCE[0]}" ]]; then
-        self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    elif [[ ! -t 0 ]]; then
-        self_path=$(mktemp)
-        trap "rm -f '$self_path'" RETURN EXIT
-        cat > "$self_path"
+    _fix "Downloading share script..."
+    local tmp_script=$(mktemp)
+    trap "rm -f '$tmp_script'" RETURN EXIT
+    if curl -fsSL "https://raw.githubusercontent.com/qiaodeli111/share2net/refs/heads/master/share" -o "$tmp_script" 2>/dev/null; then
+        if [[ -f "$script_path" ]] && diff -q "$tmp_script" "$script_path" >/dev/null 2>&1; then
+            _skip "$script_path is up to date"
+        else
+            [[ -f "$script_path" ]] && _fix "Updating $script_path" || _fix "Copying to $script_path"
+            cp "$tmp_script" "$script_path"
+            _ok "Done"
+        fi
+        chmod +x "$script_path"
     else
-        _err "Cannot determine script source. Run with: curl -fsSL ... | bash"
+        _err "Failed to download share script"
         exit 1
     fi
-
-    if [[ -f "$script_path" ]] && diff -q "$self_path" "$script_path" >/dev/null 2>&1; then
-        _skip "$script_path is up to date"
-    else
-        [[ -f "$script_path" ]] && _fix "Updating $script_path" || _fix "Copying to $script_path"
-        cp "$self_path" "$script_path"
-        _ok "Done"
-    fi
-    chmod +x "$script_path"
 
     # ── 5. PATH ─────────────────────────────────────────────────────────
     echo -e "\n${BOLD}[5/5] PATH${NC}"
